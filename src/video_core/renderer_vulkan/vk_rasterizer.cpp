@@ -3546,9 +3546,16 @@ void RasterizerVulkan::FlushWork() {
 #endif // __ANDROID__
     const bool native = gpu_memory->UsesNativeTiling();
     // The 128-draw native budget is tuned for MoltenVK; desktop Vulkan takes the legacy 4096 (#161).
+    // AMD's driver pays much more per submission. Ocarina of Time on an RX 9070 XT: every 256
+    // draws instead of 128 gave +10-12 FPS where it was already fast, every 512 a further
+    // 35 -> 50 FPS at one spot standing still. Against 512, in motion: 128 -2%, 256 even,
+    // 1024 -0.8% with a worse worst frame (zortos293/Lichii#1088).
+    const u32 base_native_budget = device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY
+                                       ? SubmissionPolicy::AmdNativeBudget
+                                       : SubmissionPolicy::DefaultNativeBudget;
     const u32 default_native_budget =
         (VideoCommon::Nx2Perf::On(VideoCommon::Nx2Perf::Opt::SubmitBudget) && !device.IsMoltenVK()) ? 4096U
-                                                                : SubmissionPolicy::DefaultNativeBudget;
+                                                                : base_native_budget;
     u32 budget = default_native_budget;
     if (native && !android) {
         static const std::optional<u32> configured_budget = []() -> std::optional<u32> {
