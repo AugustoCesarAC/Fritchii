@@ -919,6 +919,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
             });
     }
     submitted = true;
+    buffer_cache.NoteWorkRecorded(false);
 #ifdef EGLANTINE_STREAMLINE
     constexpr u64 final_vertex = 0x16aff33d999f993fULL;
     constexpr u64 final_fragment = 0x52402d8e8ab55263ULL;
@@ -2130,6 +2131,7 @@ void RasterizerVulkan::DispatchCompute() {
             });
         });
         compute_since_count_barrier = true;
+        buffer_cache.NoteWorkRecorded(true);
         SubmitNx2ListCopies(pipeline->ShaderHash());
         return;
     }
@@ -2192,6 +2194,7 @@ void RasterizerVulkan::DispatchCompute() {
         scheduler.InvalidateState();
     }
     compute_since_count_barrier = true;
+    buffer_cache.NoteWorkRecorded(true);
     SubmitNx2ListCopies(pipeline->ShaderHash());
 
 #ifdef EGLANTINE_STREAMLINE
@@ -2305,6 +2308,45 @@ void RasterizerVulkan::FlushRegion(DAddr addr, u64 size, VideoCommon::CacheType 
     if ((True(which & VideoCommon::CacheType::QueryCache))) {
         query_cache.FlushRegion(addr, size);
     }
+}
+
+void RasterizerVulkan::FlushRegionForRead(DAddr addr, u64 size) {
+    if (!VideoCore::AsyncReadback::Enabled()) {
+        FlushRegion(addr, size);
+        return;
+    }
+    if (addr == 0 || size == 0) {
+        return;
+    }
+    // As FlushRegion, but the buffer cache doesn't wait for the host GPU here (Scheduler::Finish,
+    // with its lock held): the reading thread does, in FinishRead.
+    gpu.InvalidateGPUCache();
+    {
+        std::scoped_lock lock{texture_cache.mutex};
+        texture_cache.DownloadMemory(addr, size);
+    }
+    {
+        std::scoped_lock lock{buffer_cache.mutex};
+        buffer_cache.DownloadMemoryForRead(addr, size);
+    }
+    query_cache.FlushRegion(addr, size);
+}
+
+void RasterizerVulkan::FinishRead(DAddr addr, u64 size) {
+    if (!VideoCore::AsyncReadback::Enabled()) {
+        return;
+    }
+    buffer_cache.FinishReadDownloads(addr, size);
+}
+
+bool RasterizerVulkan::NoteReportPending(DAddr addr, u64 size) {
+    std::scoped_lock lock{buffer_cache.mutex};
+    return buffer_cache.NoteReportPending(addr, size);
+}
+
+void RasterizerVulkan::FinishReport(DAddr addr, u64 size) {
+    std::scoped_lock lock{buffer_cache.mutex};
+    buffer_cache.FinishReport(addr, size);
 }
 
 bool RasterizerVulkan::MustFlushRegion(DAddr addr, u64 size, VideoCommon::CacheType which) {
@@ -2479,7 +2521,13 @@ void RasterizerVulkan::PrepareRegionWrite(DAddr addr, u64 size, VideoCommon::Cac
         return;
     }
     std::scoped_lock lock{buffer_cache.mutex};
-    buffer_cache.ClearDownload(addr, size);
+    if (!VideoCore::AsyncReadback::Enabled()) {
+        buffer_cache.ClearDownload(addr, size);
+        return;
+    }
+    // MemoryManager landed the read downloads here just before (FinishRead) and writes guest memory
+    // next. Landing a newer one would wait for the host GPU with the lock held, from any thread.
+    buffer_cache.ClearReplacedDownload(addr, size);
 }
 
 void RasterizerVulkan::InvalidateRegion(DAddr addr, u64 size, VideoCommon::CacheType which) {

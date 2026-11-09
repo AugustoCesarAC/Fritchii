@@ -30,6 +30,19 @@
 
 namespace Vulkan {
 namespace {
+// Makes the GPU's writes visible to host reads of the download buffers once the submission's tick
+// is done: async read-back writes them to guest memory on the reading thread (FinishRead).
+void HostReadBarrier(vk::CommandBuffer cmdbuf) {
+    const VkMemoryBarrier barrier{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+    };
+    cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0,
+                           barrier);
+}
+
 VkBufferCopy MakeBufferCopy(const VideoCommon::BufferCopy& copy) {
     return VkBufferCopy{
         .srcOffset = copy.src_offset,
@@ -585,6 +598,53 @@ void BufferCacheRuntime::WaitSubmittedTickImpl(u64 tick) {
 
 void BufferCacheRuntime::Finish() {
     scheduler.Finish();
+}
+
+void BufferCacheRuntime::FinishForHostRead() {
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.Record(HostReadBarrier);
+    scheduler.Finish();
+}
+
+u64 BufferCacheRuntime::SubmitForHostRead() {
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.Record(HostReadBarrier);
+    return scheduler.Flush();
+}
+
+u64 BufferCacheRuntime::QueueForHostRead() {
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.Record(HostReadBarrier);
+    const u64 tick = scheduler.CurrentTick();
+    if (!scheduler.DeferFlush()) {
+        scheduler.Flush();
+    }
+    return tick;
+}
+
+void BufferCacheRuntime::WaitForHostRead(u64 tick) {
+    if (scheduler.IsFree(tick)) {
+        return;
+    }
+    // A queued tick may not be submitted yet. Only the split's back submits: other threads ask it
+    // to, as for fences (InnerFence::Wait). On the back, and once it has stopped, Wait submits it.
+    if (!scheduler.IsSubmitted(tick) && VideoCommon::GpuSplit::Get().Active() &&
+        !VideoCommon::GpuSplit::OnBackThread() && scheduler.WaitSubmitted(tick)) {
+        scheduler.GetMasterSemaphore().Wait(tick);
+        return;
+    }
+    scheduler.Wait(tick);
+}
+
+bool BufferCacheRuntime::IsFreeNow(u64 tick) {
+    if (scheduler.IsFree(tick)) {
+        return true;
+    }
+    if (!scheduler.IsSubmitted(tick)) {
+        return false;
+    }
+    scheduler.GetMasterSemaphore().Refresh();
+    return scheduler.IsFree(tick);
 }
 
 bool BufferCacheRuntime::CanReorderUpload(const Buffer& buffer,
