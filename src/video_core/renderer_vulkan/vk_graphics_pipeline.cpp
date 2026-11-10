@@ -1529,6 +1529,9 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     return configured;
 }
 
+/// Writes the descriptors the stages queued and the push constants, then records the draw's state
+/// and bindings. Returns false, and the draw is skipped, when the queued descriptor count does not
+/// match the pipeline or no descriptor memory can be reserved.
 bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                                      const RenderAreaPushConstant& render_area) {
     if (guest_descriptor_queue.UpdateCount() != num_descriptor_entries) {
@@ -2272,6 +2275,8 @@ void GraphicsPipeline::FillStates(PipelineStates& s) const {
     };
 }
 
+/// Creates the Vulkan pipeline for `render_pass`. A mesh pipeline without VK_EXT_mesh_shader is
+/// built from the mesh emulation's vertex shader as a point, line or triangle list.
 void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
     if (IsMeshPipeline() && !device.IsExtMeshShaderSupported() && !mesh_emulation) {
         return;
@@ -2360,7 +2365,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
                 .pSpecializationInfo = nullptr,
             });
     }
-    // Mesh emulation draws a plain triangle list without vertex attributes.
+    // Mesh emulation draws a plain point, line or triangle list without vertex attributes.
     const VkPipelineVertexInputStateCreateInfo emulation_vertex_input{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
         .pNext = nullptr,
