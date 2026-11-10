@@ -1667,12 +1667,20 @@ void Device::RemoveUnsuitableExtensions() {
     // VK_EXT_robustness2
     // AMD keeps robustBufferAccess2: games read storage buffers out of bounds and AMD returned
     // garbage without it (Ocarina's Hyrule Field fog volume turned the sky white).
+    // EDEN_NX2_ROBUST_BUFFER=0 turns it off there too (A/B of its GPU cost), =1 on everywhere.
     const VkDriverId robustness_driver = properties.driver.driverID;
-    if (robustness_driver != VK_DRIVER_ID_AMD_PROPRIETARY &&
-        robustness_driver != VK_DRIVER_ID_AMD_OPEN_SOURCE &&
-        robustness_driver != VK_DRIVER_ID_MESA_RADV) {
+    const bool amd_driver = robustness_driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
+                            robustness_driver == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+                            robustness_driver == VK_DRIVER_ID_MESA_RADV;
+    const char* const robust_switch = std::getenv("EDEN_NX2_ROBUST_BUFFER");
+    const bool keep_robust_buffer =
+        robust_switch != nullptr ? std::string_view{robust_switch} != "0" : amd_driver;
+    if (!keep_robust_buffer) {
         features.robustness2.robustBufferAccess2 = VK_FALSE;
     }
+    LOG_INFO(Render_Vulkan, "robustBufferAccess2 {} (EDEN_NX2_ROBUST_BUFFER {})",
+             keep_robust_buffer && features.robustness2.robustBufferAccess2 ? "on" : "off",
+             robust_switch != nullptr ? robust_switch : "unset");
     features.robustness2.robustImageAccess2 = VK_FALSE;
     extensions.robustness_2 = features.robustness2.nullDescriptor;
 
