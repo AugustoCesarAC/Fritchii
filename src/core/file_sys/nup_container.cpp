@@ -18,6 +18,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+// ZSTD_WINDOWLOG_MAX (the damaged-member check) is in the static-linking part of zstd.h.
+#define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
 
 #include "common/fs/path_util.h"
