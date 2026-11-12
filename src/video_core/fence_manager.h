@@ -161,8 +161,13 @@ public:
             rasterizer.FlushCommands();
         }
         if constexpr (can_async_check) {
+            // The fencing thread waits for the host GPU while it has fences: it needs waking (a
+            // system call) only when it waits for fences to be made.
+            const bool wake = fence_thread_waiting;
             guard.unlock();
-            cv.notify_all();
+            if (wake) {
+                cv.notify_all();
+            }
         }
         if (delay_fence) {
             // Its callback runs on the fencing thread once the fence's work is done, and the
@@ -378,8 +383,11 @@ private:
                     // Fences come from SignalFence (the split's back).
                     Common::Nx2Timeline::Span wait_span{"fence: wait for work"};
                     cv.wait(lock, [&] {
-                        return stop_token.stop_requested() || (!fences.empty() && !inline_running);
+                        fence_thread_waiting = !stop_token.stop_requested() &&
+                                               (fences.empty() || inline_running);
+                        return !fence_thread_waiting;
                     });
+                    fence_thread_waiting = false;
                 }
                 if (stop_token.stop_requested()) [[unlikely]] {
                     return;
@@ -711,6 +719,7 @@ private:
     std::mutex ring_guard;
     std::mutex uncommitted_guard; ///< Guards uncommitted_operations
     std::condition_variable cv;
+    bool fence_thread_waiting{}; ///< The fencing thread waits on cv for fences (guarded by guard)
 
     std::jthread fence_thread;
 
