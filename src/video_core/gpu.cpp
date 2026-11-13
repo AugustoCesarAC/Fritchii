@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -113,6 +114,13 @@ struct GPU::Impl {
 
     /// Synchronizes CPU writes with Host GPU memory.
     void InvalidateGPUCache() {
+        // ~900 calls a frame, most with nothing collected: gather (two locks per core's manager)
+        // only when a manager shows a write. One collected after this check is gathered by the
+        // next call, as one collected just after the gather would be.
+        if (std::ranges::none_of(system.GetGPUDirtyMemoryManager(),
+                                 &Core::GPUDirtyMemoryManager::MayHavePending)) {
+            return;
+        }
         std::vector<std::pair<DAddr, u64>> writes;
         std::function<void(PAddr, size_t)> callback_writes(
             [&writes](PAddr address, size_t size) { writes.emplace_back(address, size); });
