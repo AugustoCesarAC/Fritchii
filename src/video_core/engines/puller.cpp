@@ -870,6 +870,10 @@ bool Puller::PendingAcquire::Matches(u32 current) const {
     }
 }
 
+Puller::~Puller() {
+    Nx2SemaphoreWaiters::Get().Remove(this);
+}
+
 bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
     if (!pending_acquire) {
         return true;
